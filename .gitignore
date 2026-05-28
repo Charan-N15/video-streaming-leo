@@ -84,3 +84,23 @@ xxx
 /tmp/
 /.computed/
 *.DS_Store
+
+# OMNeT++ generated results
+simulations/SatSGP4/results/
+simulations/SatSGP4/*.vec
+simulations/SatSGP4/*.sca
+simulations/SatSGP4/*.vci
+simulations/SatSGP4/*.png
+simulations/SatSGP4/*console.txt
+
+# Generated routing files
+simulations/SatSGP4/*_ISL/*.bin
+
+# Build outputs
+out/
+src/*.so
+src/*_dbg.so
+src/**/*.o
+
+# Crash dumps
+*.dmp
