@@ -3,11 +3,16 @@
 #include <algorithm>
 #include <cmath>
 
+#include "omnetpp/cstringtokenizer.h"
 #include "inet/applications/tcpapp/GenericAppMsg_m.h"
 #include "inet/common/ModuleAccess.h"
 #include "inet/common/TimeTag_m.h"
 #include "inet/common/lifecycle/ModuleOperations.h"
 #include "inet/common/packet/Packet.h"
+#include <cctype>
+#include <cstdlib>
+#include <string>
+
 
 namespace inet {
 
@@ -53,6 +58,9 @@ void AdaptiveVideoClientApp::initialize(int stage)
         maxSegmentBitrateBps = par("maxSegmentBitrate").doubleValue();
         adaptationSafetyFactor = par("adaptationSafetyFactor").doubleValue();
 
+        useBitrateLadder = par("useBitrateLadder").boolValue();
+        parseBitrateLadder();
+
         if (minSegmentBitrateBps <= 0.0)
             throw cRuntimeError("minSegmentBitrate must be greater than 0");
 
@@ -65,11 +73,30 @@ void AdaptiveVideoClientApp::initialize(int stage)
         currentSegmentBitrateBps = clampSegmentBitrate(par("segmentBitrate").doubleValue());
         lastMeasuredThroughputBps = 0.0;
 
+        if(useBitrateLadder)
+            currentSegmentBitrateBps = chooseBitrateFromLadder(currentSegmentBitrateBps);
+
+        previousRequestedBitrateBps = currentSegmentBitrateBps;
+        qualitySwitchCount = 0;
+        
+
+            
+
         enablePlaybackBuffer = par("enablePlaybackBuffer").boolValue();
         startupBufferTargetSeconds = par("startupBufferTarget").doubleValue();
+        maxBufferTargetSeconds = par("maxBufferTarget").doubleValue();
 
         if (startupBufferTargetSeconds < 0.0)
             throw cRuntimeError("startupBufferTarget cannot be negative");
+
+        if (maxBufferTargetSeconds < 0.0)
+            throw cRuntimeError("maxBufferTarget cannot be negative");
+
+        if (enablePlaybackBuffer &&
+            maxBufferTargetSeconds > 0.0 &&
+            maxBufferTargetSeconds < startupBufferTargetSeconds) {
+            throw cRuntimeError("maxBufferTarget must be greater than or equal to startupBufferTarget, or 0 to disable it");
+        }
 
         bufferLevelSeconds = 0.0;
         playbackStarted = false;
@@ -84,6 +111,7 @@ void AdaptiveVideoClientApp::initialize(int stage)
         segmentThroughputSignal = registerSignal("segmentThroughput");
 
         requestedBitrateSignal = registerSignal("requestedBitrate");
+        qualitySwitchCountSignal = registerSignal("qualitySwitchCount");
 
         bufferLevelSignal = registerSignal("bufferLevel");
         startupDelaySignal = registerSignal("startupDelay");
@@ -102,7 +130,12 @@ void AdaptiveVideoClientApp::initialize(int stage)
         WATCH(currentSegmentBitrateBps);
         WATCH(lastMeasuredThroughputBps);
 
+        WATCH(useBitrateLadder);
+        WATCH(qualitySwitchCount);
+
         WATCH(enablePlaybackBuffer);
+        WATCH(startupBufferTargetSeconds);
+        WATCH(maxBufferTargetSeconds);
         WATCH(bufferLevelSeconds);
         WATCH(playbackStarted);
         WATCH(playbackStalled);
@@ -155,6 +188,69 @@ double AdaptiveVideoClientApp::clampSegmentBitrate(double bitrateBps) const
     return bitrateBps;
 }
 
+void AdaptiveVideoClientApp::parseBitrateLadder()
+{
+    bitrateLadderBps.clear();
+
+    const char *ladder = par("bitrateLadder").stringValue();
+    cStringTokenizer tokenizer(ladder);
+
+    while (tokenizer.hasMoreTokens()) {
+        std::string token = tokenizer.nextToken();
+
+        for (char& c : token)
+            c = std::tolower(c);
+
+        char *endPtr = nullptr;
+        double value = std::strtod(token.c_str(), &endPtr);
+
+        if (value <= 0.0)
+            continue;
+
+        std::string unit = endPtr ? std::string(endPtr) : "";
+
+        double multiplier = 1.0;  // default: plain number means bps
+
+        if (unit == "bps" || unit == "")
+            multiplier = 1.0;
+        else if (unit == "kbps")
+            multiplier = 1e3;
+        else if (unit == "mbps")
+            multiplier = 1e6;
+        else if (unit == "gbps")
+            multiplier = 1e9;
+        else
+            throw cRuntimeError("Unknown bitrate unit '%s' in bitrateLadder token '%s'",
+                                unit.c_str(), token.c_str());
+
+        double bitrateBps = value * multiplier;
+        bitrateLadderBps.push_back(clampSegmentBitrate(bitrateBps));
+    }
+
+    std::sort(bitrateLadderBps.begin(), bitrateLadderBps.end());
+    bitrateLadderBps.erase(std::unique(bitrateLadderBps.begin(), bitrateLadderBps.end()), bitrateLadderBps.end());
+
+    if (useBitrateLadder && bitrateLadderBps.empty())
+        throw cRuntimeError("useBitrateLadder=true, but bitrateLadder is empty or invalid");
+}
+
+double AdaptiveVideoClientApp::chooseBitrateFromLadder(double targetBitrateBps) const
+{
+    if (!useBitrateLadder || bitrateLadderBps.empty())
+        return clampSegmentBitrate(targetBitrateBps);
+
+    double chosenBitrateBps = bitrateLadderBps.front();
+
+    for (double bitrateBps : bitrateLadderBps) {
+        if (bitrateBps <= targetBitrateBps)
+            chosenBitrateBps = bitrateBps;
+        else
+            break;
+    }
+
+    return chosenBitrateBps;
+}
+
 long AdaptiveVideoClientApp::computeSegmentSizeBytes(double bitrateBps) const
 {
     double segmentBytes = (segmentDurationSeconds * bitrateBps) / 8.0;
@@ -173,12 +269,24 @@ void AdaptiveVideoClientApp::updateSegmentBitrate(double measuredThroughputBps)
     if (measuredThroughputBps <= 0.0)
         return;
 
-    double nextBitrateBps = measuredThroughputBps * adaptationSafetyFactor;
-    currentSegmentBitrateBps = clampSegmentBitrate(nextBitrateBps);
+    double targetBitrateBps = measuredThroughputBps * adaptationSafetyFactor;
+
+    double nextBitrateBps = useBitrateLadder
+        ? chooseBitrateFromLadder(targetBitrateBps)
+        : clampSegmentBitrate(targetBitrateBps);
+
+    if (nextBitrateBps != currentSegmentBitrateBps) {
+        qualitySwitchCount++;
+        emit(qualitySwitchCountSignal, qualitySwitchCount);
+    }
+
+    currentSegmentBitrateBps = nextBitrateBps;
 }
 
 void AdaptiveVideoClientApp::sendSegmentRequest()
 {
+    if (enablePlaybackBuffer && firstSegmentRequestSent)
+        updatePlaybackBuffer(simTime());
     long requestLength = par("requestLength");
     if (requestLength < 1)
         requestLength = 1;
@@ -364,6 +472,34 @@ void AdaptiveVideoClientApp::completeCurrentSegment()
     segmentRequestInFlight = false;
 }
 
+simtime_t AdaptiveVideoClientApp::computeNextSegmentRequestDelay() const
+{
+    simtime_t delay = par("interSegmentDelay");
+
+    if (!enablePlaybackBuffer)
+        return delay;
+
+    if (maxBufferTargetSeconds <= 0.0)
+        return delay;
+
+    if (!playbackStarted)
+        return delay;
+
+    if (playbackStalled)
+        return delay;
+
+    if (bufferLevelSeconds <= maxBufferTargetSeconds)
+        return delay;
+
+    double bufferWaitSeconds = bufferLevelSeconds - maxBufferTargetSeconds;
+    simtime_t bufferWait = SimTime(bufferWaitSeconds);
+
+    if (bufferWait > delay)
+        return bufferWait;
+
+    return delay;
+}
+
 void AdaptiveVideoClientApp::socketDataArrived(TcpSocket *socket, Packet *msg, bool urgent)
 {
     long bytesArrived = msg->getByteLength();
@@ -382,7 +518,16 @@ void AdaptiveVideoClientApp::socketDataArrived(TcpSocket *socket, Packet *msg, b
 
     if (numSegmentsToRequest > 0) {
         if (timeoutMsg) {
-            simtime_t delay = par("interSegmentDelay");
+            simtime_t delay = computeNextSegmentRequestDelay();
+
+            EV_INFO << "Scheduling next segment request after "
+                    << delay
+                    << " because buffer level is "
+                    << bufferLevelSeconds
+                    << " s and maxBufferTarget is "
+                    << maxBufferTargetSeconds
+                    << " s\n";
+
             rescheduleAfterOrDeleteTimer(delay, MSGKIND_SEND);
         }
     }
@@ -390,6 +535,7 @@ void AdaptiveVideoClientApp::socketDataArrived(TcpSocket *socket, Packet *msg, b
         EV_INFO << "Final segment completed, closing TCP session\n";
         close();
     }
+
 }
 
 void AdaptiveVideoClientApp::rescheduleAfterOrDeleteTimer(simtime_t delay, short int msgKind)

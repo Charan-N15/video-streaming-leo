@@ -4,6 +4,7 @@
 #include "inet/applications/tcpapp/TcpAppBase.h"
 #include "inet/common/lifecycle/ILifecycle.h"
 #include "inet/common/lifecycle/NodeStatus.h"
+#include <vector>
 
 namespace inet {
 
@@ -34,10 +35,17 @@ class AdaptiveVideoClientApp : public TcpAppBase
     double maxSegmentBitrateBps = 0.0;
     double adaptationSafetyFactor = 1.0;
 
+    bool useBitrateLadder = false;
+    std::vector<double> bitrateLadderBps;
+
+    int qualitySwitchCount = 0;
+    double previousRequestedBitrateBps = 0.0;
+
     // Playback buffer state
     bool enablePlaybackBuffer = false;
     double segmentDurationSeconds = 0.0;
     double startupBufferTargetSeconds = 0.0;
+    double maxBufferTargetSeconds = 0.0;
     double bufferLevelSeconds = 0.0;
 
     bool playbackStarted = false;
@@ -64,14 +72,19 @@ class AdaptiveVideoClientApp : public TcpAppBase
     simsignal_t stallStartedSignal;
     simsignal_t stallDurationSignal;
     simsignal_t totalStallDurationSignal;
+    simsignal_t qualitySwitchCountSignal;
 
   protected:
     virtual long computeSegmentSizeBytes(double bitrateBps) const;
     virtual double clampSegmentBitrate(double bitrateBps) const;
+    virtual void parseBitrateLadder();
+    virtual double chooseBitrateFromLadder(double targetBitrateBps) const;
     virtual void updateSegmentBitrate(double measuredThroughputBps);
+
 
     virtual void sendSegmentRequest();
     virtual void completeCurrentSegment();
+    virtual simtime_t computeNextSegmentRequestDelay() const;
 
     virtual void updatePlaybackBuffer(simtime_t now);
     virtual void addCompletedSegmentToBuffer();

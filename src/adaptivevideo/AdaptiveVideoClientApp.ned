@@ -45,9 +45,17 @@ simple AdaptiveVideoClientApp like IApp
         double maxSegmentBitrate @unit(bps) = default(30Mbps);
         double adaptationSafetyFactor = default(1.0);
 
+        // if this is enabled, chooses from a fixed "ladder" instead of any bitrate value
+        bool useBitrateLadder = default(true);
+        string bitrateLadder = default("300kbps 750kbps 1200kbps 2500kbps 4000kbps");
+
         // Playback model
         bool enablePlaybackBuffer = default(false);
         double startupBufferTarget @unit(s) = default(4s);
+
+        // If > 0, the client pauses before requesting the next segment
+        // when the playback buffer is above this target.
+        double maxBufferTarget @unit(s) = default(0s);
 
         // Delay before requesting the next segment after the previous one completes
         volatile double interSegmentDelay @unit(s) = default(0s);
@@ -76,6 +84,7 @@ simple AdaptiveVideoClientApp like IApp
         @signal[segmentThroughput](type=double);
 
         @signal[requestedBitrate](type=double);
+        @signal[qualitySwitchCount](type=long);
 
         @signal[bufferLevel](type=double);
         @signal[startupDelay](type=double);
@@ -156,6 +165,13 @@ simple AdaptiveVideoClientApp like IApp
             unit=bps;
             record=vector,mean;
             interpolationmode=none
+        );
+
+        @statistic[qualitySwitchCount](
+            title="quality switch count";
+            source=qualitySwitchCount;
+            record=last,vector;
+            interpolationmode=sample-hold
         );
 
         @statistic[bufferLevel](
