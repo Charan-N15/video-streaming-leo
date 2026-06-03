@@ -149,6 +149,26 @@ protected:
     Ipv4Address netmask;
 
     bool enableInterSatelliteLinks;
+
+
+    // The jitter variables below
+
+    bool enableLeoDelayVariation = false;
+    bool enableNormalJitter = true;
+    bool enableReconfigurationSpike = true;
+    bool applyDelayVariationOnlyToGroundLinks = true;
+
+    double normalJitterBaselineSeconds = 0.0;
+    double normalJitterStddevSeconds = 0.0;
+    double maxNormalJitterSeconds = 0.0;
+
+    double reconfigurationIntervalSeconds = 15.0;
+    double reconfigurationSpikeAmplitudeSeconds = 0.0;
+    double reconfigurationSpikeWidthSeconds = 0.0;
+
+    double applyLeoDelayVariation(double baseDelaySeconds, bool isGroundStationLink);
+    double computeNormalJitterSeconds();
+    double computeReconfigurationSpikeSeconds() const;
 };
 
 }

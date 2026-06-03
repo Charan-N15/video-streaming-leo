@@ -27,4 +27,26 @@ simple LeoChannelConstructor
        double userTerminalUpdateInterval @unit(s) = default(15s);
        double userTerminalSampleInterval @unit(s) = default(1s);
        double userTerminalHandoverDowntime @unit(s) = default(50ms);
+
+
+       // Extra channel delay on top of geometric propogation delay
+       bool enableLeoDelayVariation = default(false);
+
+       // Two different delays, these are the enablers
+       bool enableNormalJitter = default(true);
+       bool enableReconfigurationSpike = default(true);
+
+
+       // Only apply the jitter to the ground station to not make it multiply over every ISL hope
+       bool applyDelayVariationOnlyToGroundLinks = default(true);
+
+       // Small random noise for the normal jitter, adjustable
+       double normalJitterBaseline @unit(s) = default(1.5ms);
+       double normalJitterStddev @unit(s) = default(0.5ms);
+       double maxNormalJitter @unit(s) = default(2ms);
+
+       // the 15 second Starlink reconfiguration spike
+       double reconfigurationInterval @unit(s) = default(15s);
+       double reconfigurationSpikeAmplitude @unit(s) = default(3ms);
+       double reconfigurationSpikeWidth @unit(s) = default(0.5s);
 }

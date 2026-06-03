@@ -62,6 +62,21 @@ LeoChannelConstructor::LeoChannelConstructor(){
     userTerminalHandoverDowntime = 0;
     nextUserTerminalUpdate = 0;
     linkDataRate = 0;
+
+    // Jitter variables initialization
+    enableLeoDelayVariation = false;
+    enableNormalJitter = true;
+    enableReconfigurationSpike = true;
+    applyDelayVariationOnlyToGroundLinks = true;
+
+    normalJitterBaselineSeconds = 0.0;
+    normalJitterStddevSeconds = 0.0;
+    maxNormalJitterSeconds = 0.0;
+
+    reconfigurationIntervalSeconds = 15.0;
+    reconfigurationSpikeAmplitudeSeconds = 0.0;
+    reconfigurationSpikeWidthSeconds = 0.0;
+
 }
 
 void LeoChannelConstructor::initialize(int stage)
@@ -103,6 +118,37 @@ void LeoChannelConstructor::initialize(int stage)
         userTerminalSampleInterval = par("userTerminalSampleInterval");
         userTerminalHandoverDowntime = par("userTerminalHandoverDowntime");
         nextUserTerminalUpdate = 0;
+
+        // Initialize jitter parameters
+        enableLeoDelayVariation = par("enableLeoDelayVariation").boolValue();
+        enableNormalJitter = par("enableNormalJitter").boolValue();
+        enableReconfigurationSpike = par("enableReconfigurationSpike").boolValue();
+        applyDelayVariationOnlyToGroundLinks = par("applyDelayVariationOnlyToGroundLinks").boolValue();
+
+        normalJitterBaselineSeconds = par("normalJitterBaseline").doubleValue();
+        normalJitterStddevSeconds = par("normalJitterStddev").doubleValue();
+        maxNormalJitterSeconds = par("maxNormalJitter").doubleValue();
+
+        reconfigurationIntervalSeconds = par("reconfigurationInterval").doubleValue();
+        reconfigurationSpikeAmplitudeSeconds = par("reconfigurationSpikeAmplitude").doubleValue();
+        reconfigurationSpikeWidthSeconds = par("reconfigurationSpikeWidth").doubleValue();
+
+        if (normalJitterBaselineSeconds < 0.0)
+            throw cRuntimeError("normalJitterBaseline cannot be negative");
+        if (normalJitterStddevSeconds < 0.0)
+            throw cRuntimeError("normalJitterStddev cannot be negative");
+
+        if (maxNormalJitterSeconds < 0.0)
+            throw cRuntimeError("maxNormalJitter cannot be negative");
+
+        if (reconfigurationIntervalSeconds <= 0.0)
+            throw cRuntimeError("reconfigurationInterval must be greater than 0");
+
+        if (reconfigurationSpikeAmplitudeSeconds < 0.0)
+            throw cRuntimeError("reconfigurationSpikeAmplitude cannot be negative");
+
+        if (reconfigurationSpikeWidthSeconds < 0.0)
+            throw cRuntimeError("reconfigurationSpikeWidth cannot be negative");
 
         // Get general network configuration
         networkName = parent->getName();
@@ -403,6 +449,90 @@ std::pair<cGate*,cGate*> LeoChannelConstructor::getNextFreeGate(cModule *mod)
     return std::pair<cGate*, cGate*>(inGate, outGate);
 }
 
+// Jitter helper functions
+double LeoChannelConstructor::computeNormalJitterSeconds()
+{
+    if (!enableNormalJitter)
+        return 0.0;
+
+    double jitterSeconds = normalJitterBaselineSeconds;
+
+    if (normalJitterStddevSeconds > 0.0) {
+        double randomComponent = normal(0.0, normalJitterStddevSeconds);
+
+        if (maxNormalJitterSeconds > 0.0) {
+            if (randomComponent > maxNormalJitterSeconds)
+                randomComponent = maxNormalJitterSeconds;
+            else if (randomComponent < -maxNormalJitterSeconds)
+                randomComponent = -maxNormalJitterSeconds;
+        }
+
+        jitterSeconds += randomComponent;
+    }
+
+    // Preserve physical minimum: no negative extra delay.
+    if (jitterSeconds < 0.0)
+        jitterSeconds = 0.0;
+
+    return jitterSeconds;
+}
+
+double LeoChannelConstructor::computeReconfigurationSpikeSeconds() const
+{
+    if (!enableReconfigurationSpike)
+        return 0.0;
+
+    if (reconfigurationSpikeAmplitudeSeconds <= 0.0)
+        return 0.0;
+
+    if (reconfigurationIntervalSeconds <= 0.0)
+        return 0.0;
+
+    if (reconfigurationSpikeWidthSeconds <= 0.0)
+        return 0.0;
+
+    double nowSeconds = simTime().dbl();
+
+    // Distance to nearest 15-second boundary:
+    // 0, 15, 30, 45, ...
+    double intervalPosition = std::fmod(nowSeconds, reconfigurationIntervalSeconds);
+    double distanceToPreviousBoundary = intervalPosition;
+    double distanceToNextBoundary = reconfigurationIntervalSeconds - intervalPosition;
+    double distanceToNearestBoundary = std::min(distanceToPreviousBoundary, distanceToNextBoundary);
+
+    if (distanceToNearestBoundary > reconfigurationSpikeWidthSeconds)
+        return 0.0;
+
+    // Triangular spike:
+    double normalizedDistance = distanceToNearestBoundary / reconfigurationSpikeWidthSeconds;
+    double spikeScale = 1.0 - normalizedDistance;
+
+    return reconfigurationSpikeAmplitudeSeconds * spikeScale;
+}
+
+double LeoChannelConstructor::applyLeoDelayVariation(double baseDelaySeconds, bool isGroundStationLink)
+{
+    if (!enableLeoDelayVariation)
+        return baseDelaySeconds;
+
+    if (applyDelayVariationOnlyToGroundLinks && !isGroundStationLink)
+        return baseDelaySeconds;
+
+    double extraDelaySeconds = 0.0;
+
+    extraDelaySeconds += computeNormalJitterSeconds();
+    extraDelaySeconds += computeReconfigurationSpikeSeconds();
+
+    double variedDelaySeconds = baseDelaySeconds + extraDelaySeconds;
+
+    // Do not allow the delay to go below the geometric propagation delay.
+    // This keeps the model from creating physically impossible faster-than-base links.
+    if (variedDelaySeconds < baseDelaySeconds)
+        variedDelaySeconds = baseDelaySeconds;
+
+    return variedDelaySeconds;
+}
+
 void LeoChannelConstructor::updateChannels()
 {
     configurator->clearGroundStationLinks();
@@ -414,9 +544,12 @@ void LeoChannelConstructor::updateChannels()
         double delaySeconds = (activeLink.satelliteMobility->getDistance(activeLink.userTerminalMobility->getLUTPositionY(),
                                                                         activeLink.userTerminalMobility->getLUTPositionX(),
                                                                         0) * 1000.0) / 299792458.0;
-        activeLink.forwardChannel->setDelay(delaySeconds);
+
+        double variedDelaySeconds = applyLeoDelayVariation(delaySeconds, true);
+
+        activeLink.forwardChannel->setDelay(variedDelaySeconds);
         activeLink.forwardChannel->setDatarate(linkDataRate);
-        activeLink.reverseChannel->setDelay(delaySeconds);
+        activeLink.reverseChannel->setDelay(variedDelaySeconds);
         activeLink.reverseChannel->setDatarate(linkDataRate);
     }
 }
@@ -1029,9 +1162,11 @@ void LeoChannelConstructor::updateTimedLink(const TimedLinkRecord& linkRecord)
                                                                        linkRecord.destinationSatelliteMobility->getAltitude()) * 1000.0) / 299792458.0;
     }
 
-    linkRecord.forwardChannel->setDelay(delaySeconds);
+    double variedDelaySeconds = applyLeoDelayVariation(delaySeconds, linkRecord.isGroundStationLink);
+
+    linkRecord.forwardChannel->setDelay(variedDelaySeconds);
     linkRecord.forwardChannel->setDatarate(linkDataRate);
-    linkRecord.reverseChannel->setDelay(delaySeconds);
+    linkRecord.reverseChannel->setDelay(variedDelaySeconds);
     linkRecord.reverseChannel->setDatarate(linkDataRate);
 }
 
