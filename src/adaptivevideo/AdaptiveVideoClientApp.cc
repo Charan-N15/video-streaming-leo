@@ -26,6 +26,7 @@ AdaptiveVideoClientApp::~AdaptiveVideoClientApp()
     cancelAndDelete(timeoutMsg);
 }
 
+// Init video session state, ABR, playback buffer, and values we want to record
 void AdaptiveVideoClientApp::initialize(int stage)
 {
     TcpAppBase::initialize(stage);
@@ -92,9 +93,7 @@ void AdaptiveVideoClientApp::initialize(int stage)
         if (maxBufferTargetSeconds < 0.0)
             throw cRuntimeError("maxBufferTarget cannot be negative");
 
-        if (enablePlaybackBuffer &&
-            maxBufferTargetSeconds > 0.0 &&
-            maxBufferTargetSeconds < startupBufferTargetSeconds) {
+        if (enablePlaybackBuffer && maxBufferTargetSeconds > 0.0 && maxBufferTargetSeconds < startupBufferTargetSeconds) {
             throw cRuntimeError("maxBufferTarget must be greater than or equal to startupBufferTarget, or 0 to disable it");
         }
 
@@ -144,27 +143,24 @@ void AdaptiveVideoClientApp::initialize(int stage)
     }
 }
 
+// Schedule the first tcp connection when app starts
 void AdaptiveVideoClientApp::handleStartOperation(LifecycleOperation *operation)
 {
     simtime_t now = simTime();
     simtime_t start = std::max(startTime, now);
 
-    if (timeoutMsg &&
-        ((stopTime < SIMTIME_ZERO) ||
-         (start < stopTime) ||
-         (start == stopTime && startTime == stopTime))) {
+    if (timeoutMsg && ((stopTime < SIMTIME_ZERO) || (start < stopTime) || (start == stopTime && startTime == stopTime))) {
         timeoutMsg->setKind(MSGKIND_CONNECT);
         scheduleAt(start, timeoutMsg);
     }
 }
 
+// stop the tcp connection when shutdown
 void AdaptiveVideoClientApp::handleStopOperation(LifecycleOperation *operation)
 {
     cancelEvent(timeoutMsg);
 
-    if (socket.getState() == TcpSocket::CONNECTED ||
-        socket.getState() == TcpSocket::CONNECTING ||
-        socket.getState() == TcpSocket::PEER_CLOSED) {
+    if (socket.getState() == TcpSocket::CONNECTED || socket.getState() == TcpSocket::CONNECTING || socket.getState() == TcpSocket::PEER_CLOSED) {
         close();
     }
 }
@@ -177,6 +173,7 @@ void AdaptiveVideoClientApp::handleCrashOperation(LifecycleOperation *operation)
         socket.destroy();
 }
 
+// keep bitrate inside min/max range specified by user params
 double AdaptiveVideoClientApp::clampSegmentBitrate(double bitrateBps) const
 {
     if (bitrateBps < minSegmentBitrateBps)
@@ -188,6 +185,7 @@ double AdaptiveVideoClientApp::clampSegmentBitrate(double bitrateBps) const
     return bitrateBps;
 }
 
+// Parse the bitrate ladder that the user wanted
 void AdaptiveVideoClientApp::parseBitrateLadder()
 {
     bitrateLadderBps.clear();
@@ -234,6 +232,7 @@ void AdaptiveVideoClientApp::parseBitrateLadder()
         throw cRuntimeError("useBitrateLadder=true, but bitrateLadder is empty or invalid");
 }
 
+// choose the highest ladder bitrate that does not exceed the target bitrate
 double AdaptiveVideoClientApp::chooseBitrateFromLadder(double targetBitrateBps) const
 {
     if (!useBitrateLadder || bitrateLadderBps.empty())
@@ -251,6 +250,7 @@ double AdaptiveVideoClientApp::chooseBitrateFromLadder(double targetBitrateBps) 
     return chosenBitrateBps;
 }
 
+
 long AdaptiveVideoClientApp::computeSegmentSizeBytes(double bitrateBps) const
 {
     double segmentBytes = (segmentDurationSeconds * bitrateBps) / 8.0;
@@ -259,6 +259,7 @@ long AdaptiveVideoClientApp::computeSegmentSizeBytes(double bitrateBps) const
     return std::max<long>(1, roundedBytes);
 }
 
+// new bitrate based on throughput computation
 void AdaptiveVideoClientApp::updateSegmentBitrate(double measuredThroughputBps)
 {
     lastMeasuredThroughputBps = measuredThroughputBps;
@@ -271,9 +272,7 @@ void AdaptiveVideoClientApp::updateSegmentBitrate(double measuredThroughputBps)
 
     double targetBitrateBps = measuredThroughputBps * adaptationSafetyFactor;
 
-    double nextBitrateBps = useBitrateLadder
-        ? chooseBitrateFromLadder(targetBitrateBps)
-        : clampSegmentBitrate(targetBitrateBps);
+    double nextBitrateBps = useBitrateLadder ? chooseBitrateFromLadder(targetBitrateBps) : clampSegmentBitrate(targetBitrateBps);
 
     if (nextBitrateBps != currentSegmentBitrateBps) {
         qualitySwitchCount++;
@@ -283,6 +282,7 @@ void AdaptiveVideoClientApp::updateSegmentBitrate(double measuredThroughputBps)
     currentSegmentBitrateBps = nextBitrateBps;
 }
 
+// also records metrics
 void AdaptiveVideoClientApp::sendSegmentRequest()
 {
     if (enablePlaybackBuffer && firstSegmentRequestSent)
@@ -366,6 +366,7 @@ void AdaptiveVideoClientApp::socketEstablished(TcpSocket *socket)
     numSegmentsToRequest--;
 }
 
+// drain buffer
 void AdaptiveVideoClientApp::updatePlaybackBuffer(simtime_t now)
 {
     if (!enablePlaybackBuffer || !playbackStarted)
@@ -400,6 +401,7 @@ void AdaptiveVideoClientApp::updatePlaybackBuffer(simtime_t now)
     emit(bufferLevelSignal, bufferLevelSeconds);
 }
 
+// add to buffer, also handle startup/stall recovery
 void AdaptiveVideoClientApp::addCompletedSegmentToBuffer()
 {
     if (!enablePlaybackBuffer)
@@ -472,6 +474,7 @@ void AdaptiveVideoClientApp::completeCurrentSegment()
     segmentRequestInFlight = false;
 }
 
+// delay next segment if playback buffer is full (above max target buffer)
 simtime_t AdaptiveVideoClientApp::computeNextSegmentRequestDelay() const
 {
     simtime_t delay = par("interSegmentDelay");

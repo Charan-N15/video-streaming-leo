@@ -59,13 +59,13 @@ class AdaptiveVideoClientApp : public TcpAppBase
     int stallCount = 0;
     double totalStallDurationSeconds = 0.0;
 
-    // Existing segment signals
+    // existing segment signals from original tcp model
     simsignal_t segmentIndexSignal;
     simsignal_t segmentSizeBytesSignal;
     simsignal_t segmentDownloadTimeSignal;
     simsignal_t segmentThroughputSignal;
 
-    // New adaptation / playback signals
+    // new playback signals
     simsignal_t requestedBitrateSignal;
     simsignal_t bufferLevelSignal;
     simsignal_t startupDelaySignal;

@@ -9,13 +9,8 @@ import inet.applications.contract.IApp;
 //
 // The client requests video in segments from TcpGenericServerApp.
 // Each request tells the server how many bytes to return.
-//
-// Version 2 adds:
-//  - Neubot-DASH-style throughput-based bitrate adaptation
-//  - playback buffer tracking
-//  - startup delay tracking
-//  - playback stall detection
-//
+
+
 simple AdaptiveVideoClientApp like IApp
 {
     parameters:
@@ -34,18 +29,17 @@ simple AdaptiveVideoClientApp like IApp
         // Segment timing
         double segmentDuration @unit(s) = default(2s);
 
-        // Initial bitrate. If adaptBitrate=false, this stays fixed.
-        // If adaptBitrate=true, it is only the bitrate for the first segment.
+        // Initial bitrate. If adaptBitrate=false, stays fixed
+        // If adaptBitrate=true, it is only the bitrate for the first segment
         double segmentBitrate @unit(bps) = default(3Mbps);
 
-        // Neubot-style adaptation:
         // next bitrate = measured throughput × adaptationSafetyFactor
         bool adaptBitrate = default(false);
         double minSegmentBitrate @unit(bps) = default(100kbps);
         double maxSegmentBitrate @unit(bps) = default(30Mbps);
         double adaptationSafetyFactor = default(1.0);
 
-        // if this is enabled, chooses from a fixed "ladder" instead of any bitrate value
+        // if this is enabled, chooses from a fixed "ladder" instead of any bitrate value (probably always want this)
         bool useBitrateLadder = default(true);
         string bitrateLadder = default("300kbps 750kbps 1200kbps 2500kbps 4000kbps");
 
