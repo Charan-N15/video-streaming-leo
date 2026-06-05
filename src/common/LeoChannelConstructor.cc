@@ -111,7 +111,7 @@ void LeoChannelConstructor::initialize(int stage)
         // Get reference to the configurator submodule
         configurator = dynamic_cast<LeoIpv4NetworkConfigurator*>(parent->getSubmodule("configurator"));
 
-        // Initialize update and interval counters
+        // init update and interval counters
         updateInterval = 0;
         currentInterval = 0;
         userTerminalUpdateInterval = par("userTerminalUpdateInterval");
@@ -119,7 +119,7 @@ void LeoChannelConstructor::initialize(int stage)
         userTerminalHandoverDowntime = par("userTerminalHandoverDowntime");
         nextUserTerminalUpdate = 0;
 
-        // Initialize jitter parameters
+        // init jitter parameters
         enableLeoDelayVariation = par("enableLeoDelayVariation").boolValue();
         enableNormalJitter = par("enableNormalJitter").boolValue();
         enableReconfigurationSpike = par("enableReconfigurationSpike").boolValue();
@@ -470,7 +470,6 @@ double LeoChannelConstructor::computeNormalJitterSeconds()
         jitterSeconds += randomComponent;
     }
 
-    // Preserve physical minimum: no negative extra delay.
     if (jitterSeconds < 0.0)
         jitterSeconds = 0.0;
 
@@ -493,8 +492,7 @@ double LeoChannelConstructor::computeReconfigurationSpikeSeconds() const
 
     double nowSeconds = simTime().dbl();
 
-    // Distance to nearest 15-second boundary:
-    // 0, 15, 30, 45, ...
+    // distance to next boundary interval
     double intervalPosition = std::fmod(nowSeconds, reconfigurationIntervalSeconds);
     double distanceToPreviousBoundary = intervalPosition;
     double distanceToNextBoundary = reconfigurationIntervalSeconds - intervalPosition;
@@ -503,7 +501,7 @@ double LeoChannelConstructor::computeReconfigurationSpikeSeconds() const
     if (distanceToNearestBoundary > reconfigurationSpikeWidthSeconds)
         return 0.0;
 
-    // Triangular spike:
+    // triangulr spike
     double normalizedDistance = distanceToNearestBoundary / reconfigurationSpikeWidthSeconds;
     double spikeScale = 1.0 - normalizedDistance;
 
@@ -525,8 +523,7 @@ double LeoChannelConstructor::applyLeoDelayVariation(double baseDelaySeconds, bo
 
     double variedDelaySeconds = baseDelaySeconds + extraDelaySeconds;
 
-    // Do not allow the delay to go below the geometric propagation delay.
-    // This keeps the model from creating physically impossible faster-than-base links.
+    // do not allow the delay to go below the geometric propagation delay.
     if (variedDelaySeconds < baseDelaySeconds)
         variedDelaySeconds = baseDelaySeconds;
 
