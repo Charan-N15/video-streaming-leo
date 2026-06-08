@@ -49,16 +49,16 @@ void AdaptiveVideoClientApp::initialize(int stage)
             throw cRuntimeError("Invalid startTime/stopTime parameters");
 
         timeoutMsg = new cMessage("timer");
-
+        // Segment duration time
         segmentDurationSeconds = par("segmentDuration").doubleValue();
         if (segmentDurationSeconds <= 0.0)
             throw cRuntimeError("segmentDuration must be greater than 0");
-
+        // read the adaptive bitrate settings
         adaptBitrate = par("adaptBitrate").boolValue();
         minSegmentBitrateBps = par("minSegmentBitrate").doubleValue();
         maxSegmentBitrateBps = par("maxSegmentBitrate").doubleValue();
         adaptationSafetyFactor = par("adaptationSafetyFactor").doubleValue();
-
+        // parse bitrate ladder if ABR is enabled
         useBitrateLadder = par("useBitrateLadder").boolValue();
         parseBitrateLadder();
 
@@ -96,7 +96,7 @@ void AdaptiveVideoClientApp::initialize(int stage)
         if (enablePlaybackBuffer && maxBufferTargetSeconds > 0.0 && maxBufferTargetSeconds < startupBufferTargetSeconds) {
             throw cRuntimeError("maxBufferTarget must be greater than or equal to startupBufferTarget, or 0 to disable it");
         }
-
+        // we start with empty buffer an no stall history, resetting everything
         bufferLevelSeconds = 0.0;
         playbackStarted = false;
         playbackStalled = false;
@@ -104,6 +104,7 @@ void AdaptiveVideoClientApp::initialize(int stage)
         stallCount = 0;
         totalStallDurationSeconds = 0.0;
 
+        // Result reecording
         segmentIndexSignal = registerSignal("segmentIndex");
         segmentSizeBytesSignal = registerSignal("segmentSizeBytes");
         segmentDownloadTimeSignal = registerSignal("segmentDownloadTime");
@@ -189,13 +190,13 @@ double AdaptiveVideoClientApp::clampSegmentBitrate(double bitrateBps) const
 void AdaptiveVideoClientApp::parseBitrateLadder()
 {
     bitrateLadderBps.clear();
-
+    
     const char *ladder = par("bitrateLadder").stringValue();
     cStringTokenizer tokenizer(ladder);
 
     while (tokenizer.hasMoreTokens()) {
         std::string token = tokenizer.nextToken();
-
+        // convert to lowercase
         for (char& c : token)
             c = std::tolower(c);
 
@@ -208,7 +209,7 @@ void AdaptiveVideoClientApp::parseBitrateLadder()
         std::string unit = endPtr ? std::string(endPtr) : "";
 
         double multiplier = 1.0;  // default: plain number means bps
-
+        // account for multiple different types of units. 
         if (unit == "bps" || unit == "")
             multiplier = 1.0;
         else if (unit == "kbps")
@@ -237,9 +238,9 @@ double AdaptiveVideoClientApp::chooseBitrateFromLadder(double targetBitrateBps) 
 {
     if (!useBitrateLadder || bitrateLadderBps.empty())
         return clampSegmentBitrate(targetBitrateBps);
+    // start with lowest avialable bitrate then move upward if possible
 
     double chosenBitrateBps = bitrateLadderBps.front();
-
     for (double bitrateBps : bitrateLadderBps) {
         if (bitrateBps <= targetBitrateBps)
             chosenBitrateBps = bitrateBps;
@@ -269,11 +270,11 @@ void AdaptiveVideoClientApp::updateSegmentBitrate(double measuredThroughputBps)
 
     if (measuredThroughputBps <= 0.0)
         return;
-
+    // apply the Safety Factor so bitrate is below measured throughput (conservative estimate)
     double targetBitrateBps = measuredThroughputBps * adaptationSafetyFactor;
-
+    // either choose a ladder level if provided or just choose the targetbitrate
     double nextBitrateBps = useBitrateLadder ? chooseBitrateFromLadder(targetBitrateBps) : clampSegmentBitrate(targetBitrateBps);
-
+    // record quality swtich if changed
     if (nextBitrateBps != currentSegmentBitrateBps) {
         qualitySwitchCount++;
         emit(qualitySwitchCountSignal, qualitySwitchCount);
@@ -285,6 +286,7 @@ void AdaptiveVideoClientApp::updateSegmentBitrate(double measuredThroughputBps)
 // also records metrics
 void AdaptiveVideoClientApp::sendSegmentRequest()
 {
+    // drain buffer to current time before requesting another segment
     if (enablePlaybackBuffer && firstSegmentRequestSent)
         updatePlaybackBuffer(simTime());
     long requestLength = par("requestLength");
@@ -292,7 +294,7 @@ void AdaptiveVideoClientApp::sendSegmentRequest()
         requestLength = 1;
 
     long segmentSizeBytes = computeSegmentSizeBytes(currentSegmentBitrateBps);
-
+    // advance segment counter
     currentSegmentIndex = nextSegmentIndex;
     nextSegmentIndex++;
 
@@ -306,14 +308,14 @@ void AdaptiveVideoClientApp::sendSegmentRequest()
         firstSegmentRequestTime = simTime();
         lastBufferUpdateTime = simTime();
     }
-
+    
     emit(segmentIndexSignal, currentSegmentIndex);
     emit(segmentSizeBytesSignal, currentSegmentSizeBytes);
     emit(requestedBitrateSignal, currentSegmentBitrateBps);
 
     const auto& payload = makeShared<GenericAppMsg>();
     Packet *packet = new Packet("segmentRequest");
-
+    // TCP GenericServerApp handled this
     payload->setChunkLength(B(requestLength));
     payload->setExpectedReplyLength(B(segmentSizeBytes));
     payload->setServerClose(false);
@@ -376,16 +378,17 @@ void AdaptiveVideoClientApp::updatePlaybackBuffer(simtime_t now)
         return;
 
     double elapsedSeconds = (now - lastBufferUpdateTime).dbl();
-
+    // If stalled pause buffer
     if (playbackStalled) {
         lastBufferUpdateTime = now;
         return;
     }
-
+    // if there's enough buffered video, then continue to drain
     if (elapsedSeconds < bufferLevelSeconds) {
         bufferLevelSeconds -= elapsedSeconds;
     }
     else {
+        // Buffer reached zero so playback enters stalled state
         double timeUntilEmpty = bufferLevelSeconds;
 
         bufferLevelSeconds = 0.0;
@@ -408,11 +411,11 @@ void AdaptiveVideoClientApp::addCompletedSegmentToBuffer()
         return;
 
     simtime_t now = simTime();
-
+    // First drain buffer then add new segment
     updatePlaybackBuffer(now);
 
     bufferLevelSeconds += segmentDurationSeconds;
-
+    // Enough video has to be buffered before.
     if (!playbackStarted) {
         if (bufferLevelSeconds >= startupBufferTargetSeconds) {
             playbackStarted = true;
@@ -430,6 +433,7 @@ void AdaptiveVideoClientApp::addCompletedSegmentToBuffer()
         }
     }
     else if (playbackStalled && bufferLevelSeconds > 0.0) {
+        // Fix stall if segment has arrived
         double stallDurationSeconds = (now - stallStartTime).dbl();
 
         if (stallDurationSeconds < 0.0)
@@ -454,14 +458,14 @@ void AdaptiveVideoClientApp::completeCurrentSegment()
 {
     simtime_t downloadTime = simTime() - currentSegmentRequestTime;
     double downloadSeconds = downloadTime.dbl();
-
+    // segment size / download time = throughput
     double throughputBps = 0.0;
     if (downloadSeconds > 0.0)
         throughputBps = (currentSegmentSizeBytes * 8.0) / downloadSeconds;
 
     emit(segmentDownloadTimeSignal, downloadSeconds);
     emit(segmentThroughputSignal, throughputBps);
-
+    // completed video adds to buffer, then throughput updates bitrate
     addCompletedSegmentToBuffer();
     updateSegmentBitrate(throughputBps);
 
@@ -493,7 +497,7 @@ simtime_t AdaptiveVideoClientApp::computeNextSegmentRequestDelay() const
 
     if (bufferLevelSeconds <= maxBufferTargetSeconds)
         return delay;
-
+    // wait long enough for playback to drain the buffer back to the target
     double bufferWaitSeconds = bufferLevelSeconds - maxBufferTargetSeconds;
     simtime_t bufferWait = SimTime(bufferWaitSeconds);
 
