@@ -1,71 +1,93 @@
 # **Atlas**: OMNeT++ and INET framework for simulation Low-Earth Orbit Satellite Constellations.
 
-Atlas provides communication and mobility models that are built around the OS3 framework for OMNeT++/INET. OMNeT++ 6.1 and INET version 4.5 are used in this project version. The igraph library is used to create a topology every x seconds of the satelite constellations. The most recent I-Graph version (0.10.16) should work. See the makemake instructions for how the library (and its dependancies) can be added. igraph libraries are included within my GitHub repo (https://github.com/Avian688/igraph) which can be cloned and referenced for use in this project in case the most recent igraph version does not work.
+# LEO Adaptive Video Streaming Model
 
-You can install my updated OS3 project here:
-https://github.com/Avian688/os3
+This project extends the `leosatellites` OMNeT++/INET simulation framework with a simplified DASH-like adaptive video streaming model and a configurable RTT delay variation model.
 
-Once Atlas (leosatellites) has been cloned, right click on the project and go onto properties. Then go onto OMNeT++ > Makemake. Then double click on src: makemake to open the make file options. In the Compile tab the absolute path of the OS3 src folder should be specified as an include path. The following examples are done on a Linux system, but the setup should be almost identicle for macOS. e.g.
+## Code Structure
 
-/Volumes/LocalDataHD/av288/omnetpp-6.0/samples/os3/src
+### `src/adaptivevideo/`
 
-Then in the command line, set the enviroment as follows. It is vital that every directory mentioned is the respective directory for your system.
+This folder contains the custom adaptive video streaming application.
 
-cd $HOME/omnetpp-6.0
+`AdaptiveVideoClientApp.ned` defines the application parameters, recorded signals, and statistics for the video streaming model. These include segment size, segment download time, measured throughput, requested bitrate, playback buffer level, startup delay, stalls, and quality switches.
 
-. setenv
+`AdaptiveVideoClientApp.cc` implements the main DASH-like video streaming logic. The client requests fixed-duration video segments over TCP, computes segment size from the selected bitrate, measures segment download time, calculates throughput, updates the adaptive bitrate decision, and tracks playback buffer behavior.
 
-\# then, the working directory is set to the /src/ folder of the leosatellites project.
+`AdaptiveVideoClientApp.h` declares the state variables and helper functions used by the adaptive video client.
 
-cd $HOME/omnetpp-6.0/samples/leosatellites/src
+The video client is based on INET's TCP client/server application structure, so INET handles the lower-level TCP socket behavior while this project adds the video-specific logic. https://github.com/inet-framework/inet/blob/master/src/inet/applications/tcpapp/TcpBasicClientApp.cc
 
-\# note that depending on how inet is installed, it may appear as inet or inet4 (we use inet here) # this command generates the makefile. Make sure that the paths are correct for INET (the INET_PROJ variable) and OS3 (the OS3_PROJ variable).
+## Adaptive Video Model
 
-opp_makemake --make-so -f --deep -KINET4_4_PROJ=$HOME/omnetpp-6.0/samples/inet4.4 -KOS3_PROJ=$HOME/omnetpp-6.0/samples/os3 -DINET_IMPORT '-I/opt/local/include/igraph -I$(OS3_PROJ)/src' '-I$(INET4_4_PROJ)/src' '-I/opt/homebrew/Cellar/curl/7.83.1/include/curl' '-L/opt/local/lib' '-L$(INET4_4_PROJ)/src' '-L$(OS3_PROJ)/src' '-ligraph' '-lxml2 -lz' '-lgmp' '-lblas' '-lglpk' '-llapack' '-larpack' '-lINET$(D)' '-los3$(D)'
+The video is represented as fixed-duration segments. 
 
-\# this command builds the shared library for leosatellites
+After each segment finishes downloading, the client records:
 
-make MODE=release && make MODE=debug
+- segment download time
+- segment throughput
+- requested bitrate
+- playback buffer level
+- quality switch count
+- stall behavior
 
-Simulations can now be run, by first changing to the directory of the respective simulation. For example:
+The adaptive bitrate logic uses the measured throughput from the previous segment, applies a safety factor, and selects a bitrate from the configured bitrate ladder.
 
-cd $HOME/omnetpp-6.0/samples/leosatellites/simulations/SatSGP4
+## Jitter / Delay Variation Model
 
-\# to run in debug mode
+The delay variation model is implemented in:
 
-opp_run_dbg  -m -u Qtenv -c Experiment1 -n ../../src:..:../../../inet4.4/examples:../../../inet4.4/showcases:../../../inet4.4/src:../../../inet4.4/tests/validation:../../../inet4.4/tests/networks:../../../inet4.4/tutorials:../../../os3/simulations:../../../os3/src -x inet.common.selfdoc;inet.linklayer.configurator.gatescheduling.z3;inet.emulation;inet.showcases.visualizer.osg;inet.examples.emulation;inet.showcases.emulation;inet.transportlayer.tcp_lwip;inet.applications.voipstream;inet.visualizer.osg;inet.examples.voipstream --image-path=../../../inet4.4/images:../../../os3/images -l ../../src/leosatellites -l ../../../inet4.4/src/INET -l ../../../os3/src/os3 --debug-on-errors=true omnetpp.ini
+`src/common` 
 
-\# to run in release mode
+The modified files are:
 
-opp_run  -m -u Qtenv -c Experiment1 -n ../../src:..:../../../inet4.4/examples:../../../inet4.4/showcases:../../../inet4.4/src:../../../inet4.4/tests/validation:../../../inet4.4/tests/networks:../../../inet4.4/tutorials:../../../os3/simulations:../../../os3/src -x inet.common.selfdoc;inet.linklayer.configurator.gatescheduling.z3;inet.emulation;inet.showcases.visualizer.osg;inet.examples.emulation;inet.showcases.emulation;inet.transportlayer.tcp_lwip;inet.applications.voipstream;inet.visualizer.osg;inet.examples.voipstream --image-path=../../../inet4.4/images:../../../os3/images -l ../../src/leosatellites -l ../../../inet4.4/src/INET -l ../../../os3/src/os3 --debug-on-errors=true omnetpp.ini
+- `LeoChannelConstructor.cc`
+- `LeoChannelConstructor.h`
+- `LeoChannelConstructor.ned`
 
-Additional Information:
-> You can specify constellation information as follows in the ini file: e.g.
-**.numOfSats = 1584
-**.satsPerPlane = 22
-**.numOfPlanes = 72
-**.incl = 53
-**.alt = 550
-**.numOfGS = 95
-**.dataRate = 100Mbps
-**.queueSize = 300
-**.loadFiles = true
+The jitter model adds extra delay on top of the simulator's existing geometric propagation delay. The added helper functions are:
 
-The loadFiles parameter is important to speed the running of simulations. If this is set as false, your simulation will run a shortest path algorithm for all interfaces and may take a while to run, but routing information is saved as binary files in a folder. E.g. the above constellation will produce folder called 550_22_72_53_ISL When loadFiles is set as true, these binary files will be loaded as the simulation is run to speed run times. You can specify ground stations as follows: e.g.
+- `computeNormalJitterSeconds`
+- `computeReconfigurationSpikeSeconds`
+- `applyLeoDelayVariation`
 
-**.groundStation[0].mobility.latitude = 32.816
-**.groundStation[0].mobility.longitude = -113.797
-**.groundStation[0].cityName = "Roll AZ"
+These functions add normal RTT noise and periodic reconfiguration-style delay spikes before the final channel delay is applied.
 
-You can enable/disable inter-satellite links to simulate bent pipes with the following:
+## Simulation Configuration
 
-**.enableInterSatelliteLinks = true
+The main simulation settings are configured in:
 
-Please look at the provided ini file for other setup parameters. Any other questions let us know!
+- `omnetpp.ini`
+- `omnetpp_saveRouting.ini`
 
-# Source Code Referencing
-If you use this code or want to cite its existence in your paper please use the following bibtex:
-```
+`omnetpp_saveRouting.ini` is used to generate saved routing files for the selected satellite topology.
+
+`omnetpp.ini` defines the experiment setup, including the ground stations, video segment settings, bitrate ladder, playback buffer settings, and jitter parameters.
+
+The main adaptive video configuration is:
+
+`AdaptiveVideoV2`
+
+This configuration runs the TCP video client, TCP server, and RTT probe using the selected LEO satellite topology.
+
+## Main Output Metrics
+
+The model records both video-level and network-level behavior.
+
+Video client metrics include:
+
+- requested bitrate
+- segment download time
+- segment throughput
+- playback buffer level
+- startup delay
+- stall duration
+- quality switch count
+
+The RTT probe records round-trip time during the simulation.
+
+
+
 @inproceedings{omnetpp-leosatellites-model,
   author = {Valentine, Aiden and Parisis, George},
   title = {{Developing and experimenting with LEO satellite constellations in OMNeT++}},
